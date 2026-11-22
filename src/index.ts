@@ -46,16 +46,17 @@ export type {
 } from "./probe.js";
 
 const USAGE =
-  "usage — /wakeguard [on|off|status|check|url <url|auto>|interval <10m>] (loaded off; /wakeguard on probes immediately)";
+  "usage — /wakeguard [on|off|toggle|status|check|url <url|auto>|interval <10m>] (loaded off; bare /wakeguard toggles on/off — on probes immediately)";
 
 /**
  * OMP WakeGuard — the OMP build of pi-wakeguard.
  *
  * Shares the probe/classifier/controller modules with the Pi package; only the
  * host surface differs (OMP events and EventBus). Behaviour contract is the
- * same: loaded off and silent, `/wakeguard on` probes once immediately, then
- * every interval while down, and a reachable probe releases the parked request
- * exactly once.
+ * same: loaded off and silent; a bare `/wakeguard` toggles it, probing once
+ * immediately when it turns on and going fully silent when it turns off. While
+ * down it probes every interval, and a reachable probe releases the parked
+ * request exactly once.
  */
 export default function wakeGuardExtension(pi: ExtensionAPI): void {
   pi.registerFlag("wakeguard-url", {
@@ -112,21 +113,34 @@ export default function wakeGuardExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("wakeguard", {
     description:
-      "Sleep until the model API answers again: /wakeguard [on|off|status|check|url <url|auto>|interval <10m>]",
+      "Sleep until the model API answers again: /wakeguard toggles on/off; also [on|off|toggle|status|check|url <url|auto>|interval <10m>]",
     handler: async (args, ctx) => {
       controller.bindUi(ctx.ui);
       const [verb, ...rest] = args.trim().split(/\s+/).filter(Boolean);
       const argument = rest.join(" ");
-      switch ((verb ?? "status").toLowerCase()) {
-        case "on": {
-          if (!controller.enable()) {
-            ctx.ui.notify(
-              `wakeguard: already ${controller.currentState} — interval ${controller.status().intervalMs}ms`,
-              "info",
-            );
+      // Bare `/wakeguard` is the toggle; `status` stays available by name.
+      const command = (verb ?? "toggle").toLowerCase();
+      switch (command) {
+        case "on":
+        case "toggle": {
+          if (controller.isEnabled) {
+            // Explicit `on` is idempotent: report, never re-probe or restart the
+            // cycle. The toggle's other half is `off`.
+            if (command === "on") {
+              ctx.ui.notify(
+                `wakeguard: already ${controller.currentState} — interval ${controller.status().intervalMs}ms`,
+                "info",
+              );
+            } else {
+              controller.disable("toggled off");
+            }
             return;
           }
-          ctx.ui.notify("wakeguard: on — probing now, then every interval while down", "info");
+          // enable() already reported the no-probe-URL case, so only a real
+          // start needs the follow-up notice.
+          if (controller.enable()) {
+            ctx.ui.notify("wakeguard: on — probing now, then every interval while down", "info");
+          }
           return;
         }
         case "off":

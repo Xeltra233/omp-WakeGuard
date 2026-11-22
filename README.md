@@ -4,7 +4,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 探测、分类与状态机三个模块与 Pi 版为同逻辑独立构建，差异只在宿主表面（OMP 的事件名与 EventBus）；不跨目录共享源文件。
 
-- 包名：`omp-wakeguard`（版本 `0.1.2`），`type: module`，扩展入口 `./src/index.ts`
+- 包名：`omp-wakeguard`（版本 `0.1.3`），`type: module`，扩展入口 `./src/index.ts`
 - 宿主：`@oh-my-pi/pi-coding-agent`（`peerDependencies`：`>=18.4.1 <19.0.0`；开发依赖 18.4.1）
 - 许可：MIT
 
@@ -12,7 +12,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 ## 加载即静默
 
-扩展加载后状态为 `off`：不探测、不建 timer、不接管任何重试，状态栏也不出现条目（只有 `/wakeguard on` 之后才占位）。只有用户显式 `/wakeguard on` 才启用，并且**立即探测一次**。未启用时 `request.wait` 不写入，PVP 走原逻辑。
+扩展加载后状态为 `off`：不探测、不建 timer、不接管任何重试，状态栏也不出现条目（只有启用之后才占位）。直接输入 **`/wakeguard`** 就是模式切换：`off` → `on`（**立即探测一次**），启用中 → `off`（拆掉 gate、回到静默）。也可以显式写 `/wakeguard on` / `/wakeguard off`；未启用时 `request.wait` 不写入，PVP 走原逻辑。
 
 ---
 
@@ -20,9 +20,9 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 | 状态 | 含义 | 何时进入 |
 | :--- | :--- | :--- |
-| `off` | 默认态，完全静默：不探测、不建 timer、**不占状态栏** | 加载后；`/wakeguard off`；`session_shutdown` |
+| `off` | 默认态，完全静默：不探测、不建 timer、**不占状态栏** | 加载后；`/wakeguard` 切换关闭；`/wakeguard off`；`session_shutdown` |
 | `sleeping` | 已启用，无 timer、无停泊请求，监听仍在 | 探测成功恢复后；一次成功回合；模型/会话切换；abort 后无停泊请求 |
-| `probing` | 已启用且持有 gate：可能是在途探测，**也包括两次探测之间按 interval 等待的时段**；按 interval 链式排下一次 | `/wakeguard on`；判定为 outage / unknown 后 |
+| `probing` | 已启用且持有 gate：可能是在途探测，**也包括两次探测之间按 interval 等待的时段**；按 interval 链式排下一次 | `/wakeguard` 切换开启；`/wakeguard on`；判定为 outage / unknown 后 |
 
 恢复只有一条路径：探测判 `reachable` → 清 timer、回 `sleeping`、把所有停泊请求 `resolve(true)` 一次。同一会话再次故障会开新 gate 重新接管。
 
@@ -71,9 +71,11 @@ omp plugin uninstall --dry-run omp-wakeguard
 
 | 命令 | 作用 |
 | :--- | :--- |
-| `/wakeguard`、`/wakeguard status` | 状态块：state / url（来源 derived·explicit·none）/ interval / timeout / 停泊数 / 最近失败类别 / 最近探测结果 |
-| `/wakeguard on` | 启用并立即探测一次；已启用时只报告状态，不重复探测、不重启周期 |
+| `/wakeguard` | **直接切换模式**：`off` → `on`（立即探测一次）；启用中 → `off`（拆 gate、清 timer 与状态栏，不会自动复活） |
+| `/wakeguard on` | 显式启用并立即探测一次；已启用时只报告状态，不重复探测、不重启周期 |
+| `/wakeguard toggle` | 与裸 `/wakeguard` 完全等价，便于脚本显式书写 |
 | `/wakeguard off` | 停泊请求各自 `resolve(false)`、中止在途探测、清 timer 与状态栏，回 `off`，不会自动复活 |
+| `/wakeguard status` | 状态块：state / url（来源 derived·explicit·none）/ interval / timeout / 停泊数 / 最近失败类别 / 最近探测结果 |
 | `/wakeguard check` | 主动探测一次，不改变启用状态；`off` 时也可用 |
 | `/wakeguard url <url\|auto>` | 指定探针 URL；`auto` 按当前模型 `baseUrl` 推导 |
 | `/wakeguard interval <10m\|600000\|30s>` | 探测间隔（默认 `600000`ms），下限 1000ms；超过定时器上限的值直接拒绝 |
@@ -129,7 +131,7 @@ URL 推导：取模型 `baseUrl`，剥掉已知端点后缀（`/chat/completions
 
 **没有 PVP 时**：看门狗在 `turn_end` 观察到 `stopReason === "error"` 的失败回合后自行进入探测，只观测与恢复，不阻塞回合。`stopReason === "aborted"` 只取消 gate、保持静默——用户主动停止不是接口证据，不能变成探测流量。
 
-**OMP 原生回退**：已启用看门狗后，A 回退到 B、B 后续接口故障会自动唤醒，并探测 B 的地址；`status`、`check` 与重新 `on` 也使用实际请求模型。显式 `/wakeguard url <url>` 仍优先于模型推导。无需监听特定回退事件或手动切模型。配套 PVP 的 `/pvp on` 会临时禁用宿主原生回退；本回退链路适用于 PVP 关闭时，不改变该策略。看门狗仍默认关闭，需先 `/wakeguard on`。
+**OMP 原生回退**：已启用看门狗后，A 回退到 B、B 后续接口故障会自动唤醒，并探测 B 的地址；`status`、`check` 与重新 `on` 也使用实际请求模型。显式 `/wakeguard url <url>` 仍优先于模型推导。无需监听特定回退事件或手动切模型。配套 PVP 的 `/pvp on` 会临时禁用宿主原生回退；本回退链路适用于 PVP 关闭时，不改变该策略。看门狗仍默认关闭，需先 `/wakeguard`（或 `/wakeguard on`）。
 
 ---
 
@@ -163,6 +165,7 @@ URL 推导：取模型 `baseUrl`，剥掉已知端点后缀（`/chat/completions
 | 9 次 JSON 503 | 9 次 JSON 503 后第 10 次 POST 返回 200，`prompt_result` completed、`agentInvoked` / `sessionSettled` 为 true；10 次 POST 每次 1 条用户消息，稳定期 GET 不重复。该卡 startup 的 `/pvp on` 早于 live 绑定，宿主出现 0.5/1/2/4/8s 退避，不能作为零冷却证据 |
 | 六键真设置 | 同一 live `session.settings` 上 `/pvp on` 后六项 `retry.*` 生效、`prov=runtime`，通知为 `PVP ON` 且误告警为 0；`/pvp off` 后六项同 scope 精确还原为 baseline（`retry.enabled=false/global`，其余 `undefined/default`），宿主进程与端口均已清理 |
 | 原生回退后的备用接口故障（0.1.1） | 实际 `omp.exe` 18.4.1、PVP 不加载：A POST429 → 原生回退 B POST200 → 下一提示继续 B → B HTML503 自动探针与状态都指向 B；A 无新探针。B 恢复后跨两间隔无 GET、无失败提示重放；`check`、新提示、显式 URL 与 `url auto` 后重新启用均通过，驱动退出码 0，子进程与两个端口已释放 |
+| 裸 `/wakeguard` 切换模式（0.1.3） | 真 bundled OMP CLI 18.4.1 原生回退驱动：未启用时 footer 无条目；裸 `/wakeguard` 开启并立即探测 GET 200，footer 出现 `wakeguard probing/sleeping`；再次裸 `/wakeguard` 关闭、footer 回到 `(cleared)` 且 1.2s 内无新 GET；随后显式 `/wakeguard on` 再探测一次；尾部再次裸切换关→开亦通过。`npm run test:fallback` 整体 `PASS real OMP native fallback + backup outage + current-model commands` |
 | 未启用不占状态栏（0.1.2） | 真 bundled OMP CLI 18.4.1，两个入口各跑一遍：`loaded-off` 全程 footer 只有 `(cleared)`、probes=0、退出码 0；`off-while-parked` 序列为 `probing (0 parked)` → `probing (1 parked)` → `(cleared)`，chats=1 且退出码 1，即 off 释放了 slot 而未重试。六场景整体 `PASS real OMP CLI + real PVP`，`recover` / `structured-401` / `structured-503-json` 仍以 `wakeguard sleeping` 收尾；原生回退驱动亦通过（含 off 后清空） |
 
 **未验证范围**：flags 跨会话切换尚未形成最终验收结论；真实外部供应商端点未验收；交互 TUI 状态栏外观未截图验收；npm 尚未发布。安装可使用本地路径或上述公开 Git 源，不依赖任何临时目录或内部验收入口。

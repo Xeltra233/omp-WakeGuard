@@ -178,9 +178,20 @@ try {
   assert.equal(primary.state.gets.length, 0);
   assert.equal(backup.state.gets.length, 0);
   // Loaded-but-unused: the footer slot must stay unclaimed while the watchdog is off.
-  assert.equal(footerTexts().length, 0, "An unused wakeguard must not occupy the footer before /wakeguard on");
+  assert.equal(footerTexts().length, 0, "An unused wakeguard must not occupy the footer before the toggle");
+  // Bare `/wakeguard` is the mode switch: off -> on probes immediately.
+  await notice("/wakeguard");
+  await wait(() => primary.state.gets.at(-1)?.status === 200, "initial primary probe from the bare toggle");
+  assert.match((await status()).message, /state:\s*(probing|sleeping)/i);
+  // ... and the same bare command turns it back off, silently.
+  await notice("/wakeguard");
+  await wait(footerCleared, "footer entry cleared by the bare toggle");
+  assert.match((await status()).message, /state:\s*off/i);
+  const toggledOffGets = primary.state.gets.length;
+  await pause(1200);
+  assert.equal(primary.state.gets.length, toggledOffGets, "A toggled-off watchdog must stop probing");
   await notice("/wakeguard on");
-  await wait(() => primary.state.gets.at(-1)?.status === 200, "initial primary probe");
+  await wait(() => primary.state.gets.length === toggledOffGets + 1, "explicit /wakeguard on probes again");
   await wait(() => footerTexts().length > 0, "footer entry after enabling");
   assert.match(footerTexts().at(-1).statusText, /^wakeguard (probing|sleeping)/);
   const initialGets = primary.state.gets.length;
@@ -241,6 +252,17 @@ try {
   await wait(() => backup.state.gets.length === explicitBackupGets + 1, "re-enabled watchdog uses current backup");
   const automatic = await status();
   assert.ok(automatic.message.includes(`${backup.url}/models [derived]`));
+  // The bare command is a real toggle: off clears the footer slot and stops
+  // probing, the very next bare command brings it back on.
+  await notice("/wakeguard");
+  await wait(footerCleared, "bare /wakeguard turned the watchdog off");
+  assert.match((await status()).message, /state:\s*off/i);
+  const toggledGets = backup.state.gets.length;
+  await pause(1200);
+  assert.equal(backup.state.gets.length, toggledGets, "A toggled-off watchdog must stop probing");
+  await notice("/wakeguard");
+  await wait(() => backup.state.gets.length === toggledGets + 1, "bare /wakeguard turned the watchdog back on");
+  await wait(() => footerTexts().length > 0, "footer entry restored by the bare toggle");
   const finalGets = endpoints.map((item) => item.state.gets.length);
   const finalPosts = endpoints.map((item) => item.state.posts.length);
   await pause(2200);
