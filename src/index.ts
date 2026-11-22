@@ -165,7 +165,8 @@ export default function wakeGuardExtension(pi: ExtensionAPI): void {
     controller.bindModel(modelFacts(ctx));
   });
 
-  pi.on("before_provider_request", () => {
+  pi.on("before_provider_request", (_event, ctx) => {
+    controller.bindModel(modelFacts(ctx));
     controller.clearResponseMetadata();
   });
 
@@ -173,7 +174,7 @@ export default function wakeGuardExtension(pi: ExtensionAPI): void {
     controller.noteProviderResponse(event.status, event.headers);
   });
 
-  // OMP has no model_select event; a session switch is the model-epoch boundary.
+  // OMP has no model_select; provider requests also track native fallback targets.
   pi.on("session_switch", (_event, ctx) => {
     controller.bindUi(ctx.ui);
     controller.bindModel(modelFacts(ctx));

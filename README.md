@@ -4,7 +4,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 探测、分类与状态机三个模块与 Pi 版为同逻辑独立构建，差异只在宿主表面（OMP 的事件名与 EventBus）；不跨目录共享源文件。
 
-- 包名：`omp-wakeguard`（版本 `0.1.0`），`type: module`，扩展入口 `./src/index.ts`
+- 包名：`omp-wakeguard`（版本 `0.1.1`），`type: module`，扩展入口 `./src/index.ts`
 - 宿主：`@oh-my-pi/pi-coding-agent`（`peerDependencies`：`>=18.4.1 <19.0.0`；开发依赖 18.4.1）
 - 许可：MIT
 
@@ -30,7 +30,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 ## 安装
 
-> `omp-wakeguard` **尚未发布到 npm**。当前可靠方式是本地路径加载；Git 源在仓库公开为 `Xeltra233/omp-WakeGuard` 后可用。
+> `omp-wakeguard` 尚未发布到 npm。可使用本地路径或已公开的 Git 源 `https://github.com/Xeltra233/omp-WakeGuard`。
 
 ### 方式 1：单次会话加载（最可靠，不写配置）
 
@@ -49,11 +49,12 @@ omp plugin install ./omp-WakeGuard --dry-run    # 先看动作
 
 本地安装用 `omp plugin install /path/to/omp-WakeGuard`（等价于 `omp plugin link`），卸载用 `omp plugin uninstall omp-wakeguard`；可用 `omp plugin install ./ --dry-run` 先查看动作。`<baseUrl>` 等探针设置只影响看门狗，不改变安装入口。
 
-### 方式 3：Git 源（仓库公开之后）
+### 方式 3：Git 源安装与定向更新
 
 ```bash
 omp install https://github.com/Xeltra233/omp-WakeGuard
 omp install git:github.com/Xeltra233/omp-WakeGuard
+omp plugin install https://github.com/Xeltra233/omp-WakeGuard --force  # 更新已登记的 Git 源
 ```
 
 ### 查看与卸载
@@ -122,11 +123,13 @@ URL 推导：取模型 `baseUrl`，剥掉已知端点后缀（`/chat/completions
 
 **OMP 的取消面**：`/pvp off`、用户 abort、会话切换/分叉/tree 切换、`session_shutdown`、提交新 prompt 都会使该 `signal` abort；看门狗据此取消停泊请求。PVP 侧用 epoch 递增丢弃过期 `wait`，迟到的 `resolve(true)` 不会复活旧 run。
 
-**OMP 与 Pi 的事件差异**（本构建的实际接线）：`session_start` 绑定 UI 与模型、`before_provider_request` 清空上一条响应元数据（`lastStatus`/`lastContentType`）、`after_provider_response` 记录**本次**响应的 status 与 content-type、`session_switch` 作为模型纪元边界（OMP 无 `model_select`）取消 gate、`turn_end` 观察失败/成功、`session_shutdown` 退订并 `dispose`。
+**OMP 与 Pi 的事件差异**（本构建的实际接线）：`session_start` 绑定 UI 与模型、`before_provider_request` 同步实际请求模型并清空上一条响应元数据（`lastStatus`/`lastContentType`）、`after_provider_response` 记录**本次**响应的 status 与 content-type、`session_switch` 作为会话纪元边界（OMP 无 `model_select`）取消 gate、`turn_end` 观察失败/成功、`session_shutdown` 退订并 `dispose`。
 
 **响应元数据优先级（按当前 src，不复用上一响应）**：分类时 `status = input.status ?? lastStatus`、`contentType = input.contentType ?? lastContentType`——即 PVP 在同一次失败响应上取证的字段优先，事件缓存的 `lastStatus`/`lastContentType` 只是无 PVP 时的兜底；有 PVP 时 PVP 传入的本次证据始终压过缓存值。`status` 与 `contentType` 必须来自**同一次 attempt 的同一个 HTTP Response**：结构化 JSON 的 401/403/429/503 判 `api`（供应商在应答，PVP 继续原生重试，不停泊）；content-type 虽写 `application/json` 但响应体预览是 HTML 的关站页，会被清掉 json 标记并继续 park 探测；**没有拿到本次 HTTP Response 时两者都缺省，绝不继承更早响应的 status/content-type**。`after_provider_response` 每次都会用当前响应覆盖缓存，`before_provider_request` 在下次请求前清空，真实模型切换（`bindModel` 判定改变）也会清空；重新绑定同一模型不清空，但下一次 `before_provider_request` 仍会清掉，因此不会把更早一次响应的 status/content-type 误当成当前失败的证据。
 
 **没有 PVP 时**：看门狗在 `turn_end` 观察到 `stopReason === "error"` 的失败回合后自行进入探测，只观测与恢复，不阻塞回合。`stopReason === "aborted"` 只取消 gate、保持静默——用户主动停止不是接口证据，不能变成探测流量。
+
+**OMP 原生回退**：已启用看门狗后，A 回退到 B、B 后续接口故障会自动唤醒，并探测 B 的地址；`status`、`check` 与重新 `on` 也使用实际请求模型。显式 `/wakeguard url <url>` 仍优先于模型推导。无需监听特定回退事件或手动切模型。配套 PVP 的 `/pvp on` 会临时禁用宿主原生回退；本回退链路适用于 PVP 关闭时，不改变该策略。看门狗仍默认关闭，需先 `/wakeguard on`。
 
 ---
 
@@ -159,8 +162,9 @@ URL 推导：取模型 `baseUrl`，剥掉已知端点后缀（`/chat/completions
 | 无 PVP 独立观测 | 真正不加载 `omp-unlimited-pvp` 时，健康期保持静默（GET 1），真实失败回合后探测 GET 增至 3，恢复 GET 200 后 POST 不再增加；没有 PVP gate，不 park。宿主自身仍会按既有重试逻辑发请求并可能退避，不能据此声称零宿主重试 |
 | 9 次 JSON 503 | 9 次 JSON 503 后第 10 次 POST 返回 200，`prompt_result` completed、`agentInvoked` / `sessionSettled` 为 true；10 次 POST 每次 1 条用户消息，稳定期 GET 不重复。该卡 startup 的 `/pvp on` 早于 live 绑定，宿主出现 0.5/1/2/4/8s 退避，不能作为零冷却证据 |
 | 六键真设置 | 同一 live `session.settings` 上 `/pvp on` 后六项 `retry.*` 生效、`prov=runtime`，通知为 `PVP ON` 且误告警为 0；`/pvp off` 后六项同 scope 精确还原为 baseline（`retry.enabled=false/global`，其余 `undefined/default`），宿主进程与端口均已清理 |
+| 原生回退后的备用接口故障（0.1.1） | 实际 `omp.exe` 18.4.1、PVP 不加载：A POST429 → 原生回退 B POST200 → 下一提示继续 B → B HTML503 自动探针与状态都指向 B；A 无新探针。B 恢复后跨两间隔无 GET、无失败提示重放；`check`、新提示、显式 URL 与 `url auto` 后重新启用均通过，驱动退出码 0，子进程与两个端口已释放 |
 
-**未验证范围**：flags 跨会话切换尚未形成最终验收结论；真实外部供应商端点未验收；交互 TUI 状态栏外观未截图验收；npm 尚未发布。安装使用本地路径或仓库公开后的 Git 源，不依赖任何临时目录或内部验收入口。
+**未验证范围**：flags 跨会话切换尚未形成最终验收结论；真实外部供应商端点未验收；交互 TUI 状态栏外观未截图验收；npm 尚未发布。安装可使用本地路径或上述公开 Git 源，不依赖任何临时目录或内部验收入口。
 
 ---
 
@@ -171,11 +175,14 @@ npm install           # 会写 package-lock.json（本仓库未入库）
 npm run typecheck     # tsc --noEmit
 npm run build         # tsc，输出 dist/
 node test/omp-cli-wakeguard.mjs   # 端到端harness入口（见下）
+node test/fallback-cli.mjs        # 真实 OMP 原生回退与备用接口故障回归
 ```
 
 `test/omp-cli-wakeguard.mjs` 是真实 OMP CLI + 真实 `omp-unlimited-pvp` 的 harness 入口：只有供应商（本地 HTTP fixture）和命令输入是 fixture，断言都打在真实 `omp` 子进程上；它按 `omp-unlimited-pvp` 目录解析同名 SDK 副本，因此两个仓库需并列。
 
-`package.json` 的 `scripts` 目前只有 `build` / `typecheck`；`files` 为 `src` / `dist` / `README.md`，`omp.extensions` 与 `pi.extensions` 均指向 `./src/index.ts`。
+`npm run test:fallback` 默认启动本仓依赖中的 bundled OMP CLI，独立运行、不依赖 PVP 仓库。可用 `OMP_EXECUTABLE` 指定实际宿主可执行文件、`WAKEGUARD_EXTENSION` 指定待验收的安装入口、`WAKEGUARD_EVIDENCE_DIR` 指定本地证据目录；默认日志只写入被忽略的 `goal-1/evidence/`。只注册两个 loopback 供应商，使用隔离 agent 目录，不读取真实凭据、不修改用户回退设置；结束时清理临时目录、子进程与监听端口。
+
+`package.json` 的 `scripts` 为 `build` / `typecheck` / `test:fallback`；`files` 为 `src` / `dist` / `README.md`，`omp.extensions` 与 `pi.extensions` 均指向 `./src/index.ts`。
 
 ---
 

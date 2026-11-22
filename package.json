@@ -1,13 +1,14 @@
 {
   "name": "omp-wakeguard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OMP extension: parks model retries while the provider API is unreachable and resumes natively once a probe proves it is back.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:fallback": "node test/fallback-cli.mjs"
   },
   "files": [
     "src",
