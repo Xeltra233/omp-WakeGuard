@@ -4,7 +4,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 探测、分类与状态机三个模块与 Pi 版为同逻辑独立构建，差异只在宿主表面（OMP 的事件名与 EventBus）；不跨目录共享源文件。
 
-- 包名：`omp-wakeguard`（版本 `0.1.1`），`type: module`，扩展入口 `./src/index.ts`
+- 包名：`omp-wakeguard`（版本 `0.1.2`），`type: module`，扩展入口 `./src/index.ts`
 - 宿主：`@oh-my-pi/pi-coding-agent`（`peerDependencies`：`>=18.4.1 <19.0.0`；开发依赖 18.4.1）
 - 许可：MIT
 
@@ -12,7 +12,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 ## 加载即静默
 
-扩展加载后状态为 `off`：不探测、不建 timer、不接管任何重试。只有用户显式 `/wakeguard on` 才启用，并且**立即探测一次**。未启用时 `request.wait` 不写入，PVP 走原逻辑。
+扩展加载后状态为 `off`：不探测、不建 timer、不接管任何重试，状态栏也不出现条目（只有 `/wakeguard on` 之后才占位）。只有用户显式 `/wakeguard on` 才启用，并且**立即探测一次**。未启用时 `request.wait` 不写入，PVP 走原逻辑。
 
 ---
 
@@ -20,7 +20,7 @@ OMP（oh-my-pi）的模型接口看门狗扩展，是 [pi-wakeguard](https://git
 
 | 状态 | 含义 | 何时进入 |
 | :--- | :--- | :--- |
-| `off` | 默认态，完全静默 | 加载后；`/wakeguard off`；`session_shutdown` |
+| `off` | 默认态，完全静默：不探测、不建 timer、**不占状态栏** | 加载后；`/wakeguard off`；`session_shutdown` |
 | `sleeping` | 已启用，无 timer、无停泊请求，监听仍在 | 探测成功恢复后；一次成功回合；模型/会话切换；abort 后无停泊请求 |
 | `probing` | 已启用且持有 gate：可能是在途探测，**也包括两次探测之间按 interval 等待的时段**；按 interval 链式排下一次 | `/wakeguard on`；判定为 outage / unknown 后 |
 
@@ -78,7 +78,7 @@ omp plugin uninstall --dry-run omp-wakeguard
 | `/wakeguard url <url\|auto>` | 指定探针 URL；`auto` 按当前模型 `baseUrl` 推导 |
 | `/wakeguard interval <10m\|600000\|30s>` | 探测间隔（默认 `600000`ms），下限 1000ms；超过定时器上限的值直接拒绝 |
 
-状态栏文案：`wakeguard off` / `wakeguard sleeping` / `wakeguard probing (N parked)`。
+状态栏：只有启用的看门狗才占位。`off` 时条目被清空（`setStatus(key, undefined)`），因此加载后未使用、以及 `/wakeguard off` 之后，状态栏都不会出现 `wakeguard` 字样；`sleeping` 与 `probing` 分别显示 `wakeguard sleeping` / `wakeguard probing (N parked)`。
 
 ### CLI flag
 
@@ -163,6 +163,7 @@ URL 推导：取模型 `baseUrl`，剥掉已知端点后缀（`/chat/completions
 | 9 次 JSON 503 | 9 次 JSON 503 后第 10 次 POST 返回 200，`prompt_result` completed、`agentInvoked` / `sessionSettled` 为 true；10 次 POST 每次 1 条用户消息，稳定期 GET 不重复。该卡 startup 的 `/pvp on` 早于 live 绑定，宿主出现 0.5/1/2/4/8s 退避，不能作为零冷却证据 |
 | 六键真设置 | 同一 live `session.settings` 上 `/pvp on` 后六项 `retry.*` 生效、`prov=runtime`，通知为 `PVP ON` 且误告警为 0；`/pvp off` 后六项同 scope 精确还原为 baseline（`retry.enabled=false/global`，其余 `undefined/default`），宿主进程与端口均已清理 |
 | 原生回退后的备用接口故障（0.1.1） | 实际 `omp.exe` 18.4.1、PVP 不加载：A POST429 → 原生回退 B POST200 → 下一提示继续 B → B HTML503 自动探针与状态都指向 B；A 无新探针。B 恢复后跨两间隔无 GET、无失败提示重放；`check`、新提示、显式 URL 与 `url auto` 后重新启用均通过，驱动退出码 0，子进程与两个端口已释放 |
+| 未启用不占状态栏（0.1.2） | 真 bundled OMP CLI 18.4.1，两个入口各跑一遍：`loaded-off` 全程 footer 只有 `(cleared)`、probes=0、退出码 0；`off-while-parked` 序列为 `probing (0 parked)` → `probing (1 parked)` → `(cleared)`，chats=1 且退出码 1，即 off 释放了 slot 而未重试。六场景整体 `PASS real OMP CLI + real PVP`，`recover` / `structured-401` / `structured-503-json` 仍以 `wakeguard sleeping` 收尾；原生回退驱动亦通过（含 off 后清空） |
 
 **未验证范围**：flags 跨会话切换尚未形成最终验收结论；真实外部供应商端点未验收；交互 TUI 状态栏外观未截图验收；npm 尚未发布。安装可使用本地路径或上述公开 Git 源，不依赖任何临时目录或内部验收入口。
 

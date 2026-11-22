@@ -584,8 +584,14 @@ export class WakeGuardController {
     this.ui?.notify(`wakeguard: ${message}`, type);
   }
 
+  /**
+   * The footer entry exists only while the watchdog is actually in use: a
+   * loaded-but-unused extension must stay invisible, so `off` clears the slot
+   * instead of publishing `wakeguard off`.
+   */
   private refreshStatus(): void {
-    this.ui?.setStatus(WAKEGUARD_STATUS_KEY, statusLine(this.status()));
+    const status = this.status();
+    this.ui?.setStatus(WAKEGUARD_STATUS_KEY, status.state === "off" ? undefined : statusLine(status));
   }
 }
 

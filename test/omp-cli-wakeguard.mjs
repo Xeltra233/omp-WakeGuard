@@ -247,6 +247,12 @@ async function runScenario(
   }
 
   const gaps = endpoint.state.probeTimes.slice(1).map((t, i) => t - endpoint.state.probeTimes[i]);
+  // The host fixture forwards every `ui.setStatus` into stderr, so the footer
+  // history is the passive surface: `(cleared)` means the slot was released.
+  const footer = stderr
+    .split(String.fromCharCode(10))
+    .filter((line) => line.startsWith("WAKE_TEST status omp-wakeguard "))
+    .map((line) => line.slice("WAKE_TEST status omp-wakeguard ".length));
   const summary = {
     scenario: name,
     pid: child.pid,
@@ -257,12 +263,14 @@ async function runScenario(
     probesAfterFirstChat: endpoint.state.probesAfterFirstChat,
     chats: endpoint.state.chats,
     gaps,
+    footer,
     stdout,
     stderr,
   };
   await record(
     `[${name}] exit=${code} timedOut=${timedOut} probes=${summary.probes} chats=${summary.chats} gaps=${JSON.stringify(gaps)}`,
   );
+  await record(`[${name}] footer=${JSON.stringify(footer)}`);
   await record(`[${name}] stderr:\n${stderr.trim()}`);
   await record(`[${name}] stdout:\n${stdout.trim()}`);
 
@@ -378,9 +386,18 @@ if (enabled("structured-503-json")) assert.equal(structuredJson.probesAfterFirst
 
 if (enabled("off-while-parked")) assert.equal(cancelled.chats, 1, "a cancelled gate must not issue a retry");
 if (enabled("off-while-parked")) assert.notEqual(cancelled.code, 0, "a cancelled run exits with the provider failure");
+// The footer entry belongs to an enabled watchdog: cancelling it must release
+// the slot rather than leave `wakeguard off` sitting in the host UI.
+if (enabled("off-while-parked")) assert.equal(cancelled.footer.at(-1), "(cleared)", "off must clear the footer entry");
+if (enabled("off-while-parked")) assert.ok(!cancelled.footer.includes("wakeguard off"), "an off watchdog has no footer text");
 
 if (enabled("loaded-off")) assert.equal(loadedOff.probes, 0, "loading the extension must not send probe traffic");
 if (enabled("loaded-off")) assert.equal(loadedOff.chats, 1, "exactly the prompt's own request");
+// Loaded-but-never-enabled: the host UI must show nothing at all.
+if (enabled("loaded-off")) assert.ok(
+  loadedOff.footer.every((text) => text === "(cleared)"),
+  `an unused wakeguard must not occupy the footer: ${JSON.stringify(loadedOff.footer)}`,
+);
 
 await record(
   `PASS real OMP CLI + real PVP: ${JSON.stringify(

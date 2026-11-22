@@ -115,6 +115,16 @@ async function notice(message) {
   return wait(() => frames.slice(start).find((frame) => frame.type === "extension_ui_request" && frame.method === "notify"), `${message} notification`);
 }
 const status = () => notice("/wakeguard status");
+// The footer slot is the extension's only passive surface: it must exist only
+// while the watchdog is enabled. Frames are the RPC UI's own recording of
+// `ui.setStatus`, so `statusText` absent means the host was told to clear it.
+const footerFrames = () =>
+  frames.filter((frame) => frame.type === "extension_ui_request" && frame.method === "setStatus" && frame.statusKey === "omp-wakeguard");
+const footerTexts = () => footerFrames().filter((frame) => typeof frame.statusText === "string" && frame.statusText.length > 0);
+const footerCleared = () => {
+  const last = footerFrames().at(-1);
+  return last !== undefined && (last.statusText === undefined || last.statusText === null);
+};
 const fixtureEvents = () => stderr.split("\n").filter((line) => line.startsWith("FALLBACK_FIXTURE ")).map((line) => JSON.parse(line.slice(17)));
 const refused = (port) => new Promise((done) => {
   const socket = connect({ host: "127.0.0.1", port });
@@ -167,8 +177,12 @@ try {
   assert.match((await status()).message, /state:\s*off/i);
   assert.equal(primary.state.gets.length, 0);
   assert.equal(backup.state.gets.length, 0);
+  // Loaded-but-unused: the footer slot must stay unclaimed while the watchdog is off.
+  assert.equal(footerTexts().length, 0, "An unused wakeguard must not occupy the footer before /wakeguard on");
   await notice("/wakeguard on");
   await wait(() => primary.state.gets.at(-1)?.status === 200, "initial primary probe");
+  await wait(() => footerTexts().length > 0, "footer entry after enabling");
+  assert.match(footerTexts().at(-1).statusText, /^wakeguard (probing|sleeping)/);
   const initialGets = primary.state.gets.length;
   await pause(2200);
   assert.equal(primary.state.gets.length, initialGets, "Healthy primary must sleep across two intervals");
@@ -190,6 +204,7 @@ try {
   const probing = await status();
   assert.match(probing.message, /state:\s*probing/i);
   assert.ok(probing.message.includes(`${backup.url}/models`), "Status must target failed backup, not initial primary");
+  await wait(() => /^wakeguard probing/.test(footerTexts().at(-1)?.statusText ?? ""), "probing footer entry");
   assert.equal(primary.state.gets.length, primaryGets, "Fallback outage must never probe the old primary");
   record("BACKUP_AUTO_WAKE", { status: probing.message, primaryGets: primary.state.gets, backupGets: backup.state.gets, backupPosts: backup.state.posts });
 
@@ -201,6 +216,7 @@ try {
   assert.equal(backup.state.gets.length, recoveredGets, "Recovered backup must sleep across two intervals");
   assert.equal(backup.state.posts.length, recoveredPosts, "Without PVP, recovery must not replay the failed prompt");
   assert.match((await status()).message, /state:\s*sleeping/i);
+  await wait(() => /^wakeguard sleeping$/.test(footerTexts().at(-1)?.statusText ?? ""), "sleeping footer entry");
   record("BACKUP_RECOVERY_SLEEP", { primaryGets: primary.state.gets, backupGets: backup.state.gets });
 
   await notice("/wakeguard check");
@@ -211,6 +227,7 @@ try {
   assert.equal(backup.state.posts.at(-1).labels.filter((label) => label === labels[3]).length, 1, "Recovered prompt must not be duplicated");
 
   await notice("/wakeguard off");
+  await wait(footerCleared, "footer entry cleared by /wakeguard off");
   await notice(`/wakeguard url ${primary.url}/models`);
   const explicitBackupGets = backup.state.gets.length;
   await notice("/wakeguard on");
